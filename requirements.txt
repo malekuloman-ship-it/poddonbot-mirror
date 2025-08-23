@@ -1,0 +1,4 @@
+aiogram==3.*
+pandas
+python-dotenv
+dateparser

@@ -1,3 +1,0 @@
-id,name,address,metro,lat,lon,hours_weekday,hours_weekend,phone,maps_url
-1,Малый Поддон,"Саратов, Театральная площадь 9",,,,вс-чт 17:00-02:00,пт-сб 17:00-04:00,+79372626662,https://yandex.com/maps/-/CHxuRUIY
-2,Большой Поддон,"Саратов, Московская 104",,,,вс-чт 17:00-02:00,пт-сб 17:00-04:00,+79372646426,https://yandex.com/maps/-/CHxuRHZA

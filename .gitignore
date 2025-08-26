@@ -1,9 +1,10 @@
 .env
 .venv/
-__pycache__/
 data/
 quiz_users.csv
 bookings.csv
 coupons_generated.csv
+facts_template.csv
+__pycache__/
 tmp_menu_cache/
 *.log

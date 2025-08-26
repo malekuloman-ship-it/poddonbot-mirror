@@ -659,10 +659,10 @@ async def cb_admin_cancel(call: CallbackQuery):
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="ПОСМОТРЕТЬ МЕНЮ", callback_data="action:menu"),
-         InlineKeyboardButton(text="Часы/адрес", callback_data="action:venue")],
-        [InlineKeyboardButton(text="Викторина", callback_data="action:quiz"),
-         InlineKeyboardButton(text="Бронь", callback_data="action:book")]
+        [InlineKeyboardButton(text="МЕНЮ", callback_data="action:menu"),
+         InlineKeyboardButton(text="КОНТАКТЫ", callback_data="action:venue")],
+        [InlineKeyboardButton(text="ВИКТОРИНА", callback_data="action:quiz"),
+         InlineKeyboardButton(text="БРОНЬ", callback_data="action:book")]
     ])
     await message.answer(COPY.get("greeting", "Привет!"), reply_markup=kb)
 
@@ -700,7 +700,7 @@ async def cb_venue(call: CallbackQuery):
 
 @dp.callback_query(F.data == "action:book")
 async def cb_book(call: CallbackQuery):
-    await call.message.answer("Окей, забронируем. Расскажи **когда**, **во сколько** и **сколько вас будет человек** (можно диапазон).")
+    await call.message.answer("Окей, забронируем. Расскажи когда, во сколько и сколько вас будет человек (можно диапазон).")
     await call.answer()
 
 @dp.callback_query(F.data == "action:quiz")
@@ -776,7 +776,7 @@ async def finalize_booking(message: Message, st: dict):
     gmax   = st.get("guests_max", gmin)
 
     if not (date_o and time_s and gmax and phone):
-        await message.answer("Давай ещё раз: **когда**, **во сколько**, **сколько вас** (можно диапазон), и телефон с именем.")
+        await message.answer("Давай ещё раз: когда, во сколько, сколько вас (можно диапазон), и телефон с именем.")
         return
 
     guests_range_str = f"{gmin}-{gmax}" if gmin and gmax and gmin != gmax else str(gmax)
@@ -844,3 +844,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

@@ -1,0 +1,33 @@
+name: Validate JSON
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate-json:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Validate all JSON files
+        run: |
+          python - <<'PY'
+          import json, sys, pathlib
+          errors = []
+          for path in pathlib.Path(".").rglob("*.json"):
+              try:
+                  json.load(open(path, "r", encoding="utf-8"))
+              except Exception as e:
+                  errors.append(f"{path}: {e}")
+          if errors:
+              print("❌ Invalid JSON found:\n" + "\n".join(errors))
+              sys.exit(1)
+          print("✅ All JSON files are valid.")
+          PY

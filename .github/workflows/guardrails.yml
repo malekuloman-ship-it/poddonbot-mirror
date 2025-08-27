@@ -1,0 +1,60 @@
+name: Repo Guardrails (JSON + Forbidden Files)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 1) Проверка, что в репо не попали приватные файлы/папки
+      - name: Check forbidden files
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden=(
+            ".env"
+            ".venv"
+            "data"
+            "quiz_users.csv"
+            "bookings.csv"
+            "coupons_generated.csv"
+            "facts_template.csv"
+            "tmp_menu_cache"
+            "*.log"
+          )
+          found=0
+          for pattern in "${forbidden[@]}"; do
+            if compgen -G "$pattern" > /dev/null; then
+              echo "❌ Forbidden file or folder matched: $pattern"
+              found=1
+            fi
+          done
+          if [[ $found -eq 1 ]]; then
+            echo "Commit rejected due to forbidden files."
+            exit 1
+          fi
+          echo "✅ No forbidden files detected."
+
+      # 2) Валидация всех JSON-файлов
+      - name: Validate JSON files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, sys, pathlib
+          errors = []
+          for p in pathlib.Path(".").rglob("*.json"):
+              try:
+                  json.load(open(p, encoding="utf-8"))
+              except Exception as e:
+                  errors.append(f"{p}: {e}")
+          if errors:
+              print("❌ Invalid JSON:\n" + "\n".join(errors))
+              sys.exit(1)
+          print("✅ All JSON files are valid.")
+          PY

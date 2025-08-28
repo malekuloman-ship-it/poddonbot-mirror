@@ -28,6 +28,12 @@ QUIZ_USERS_CSV   = os.path.join(BASE_DIR, "quiz_users.csv")
 COUPONS_GEN_CSV  = os.path.join(BASE_DIR, "coupons_generated.csv")
 os.makedirs(TMP_MENU_DIR, exist_ok=True)
 
+# Филиалы меню (используется в кнопках выбора)
+MENU_BRANCHES = [
+    {"name": "Большой ПОДДОН", "slug": "big"},
+    {"name": "Малый ПОДДОН",   "slug": "small"},
+]
+
 # -------------------- ENV & LOGGING --------------------
 load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
@@ -698,7 +704,7 @@ async def cmd_start(message: Message):
     ])
     await message.answer(COPY.get("greeting", "Привет!"), reply_markup=kb)
 
-@dp.message(Command("health")))
+@dp.message(Command("health"))
 async def cmd_health(message: Message):
     import sys
     import aiogram, pandas, PIL
@@ -711,22 +717,22 @@ async def cmd_health(message: Message):
     )
     await message.answer(info)
 
-@dp.message(Command("whoami")))
+@dp.message(Command("whoami"))
 async def cmd_whoami(message: Message):
     await message.answer(f"Твой user_id: {message.from_user.id}\nЧат id: {message.chat.id}")
 
-@dp.message(Command("bookings_today")))
+@dp.message(Command("bookings_today"))
 async def cmd_bookings_today(message: Message):
     if not ADMIN_CHAT_ID or str(message.chat.id) != str(ADMIN_CHAT_ID):
         await message.answer("Команда доступна только в админ-чате."); return
     df = load_bookings()
-    if df.empty: 
-        await message.answer("Сегодня броней нет."); 
+    if df.empty:
+        await message.answer("Сегодня броней нет.")
         return
     today = datetime.now().date().isoformat(); df["date"] = df["date"].astype(str)
     today_df = df[df["date"] == today]
-    if today_df.empty: 
-        await message.answer("Сегодня броней нет."); 
+    if today_df.empty:
+        await message.answer("Сегодня броней нет.")
         return
     lines = [f"#{int(r['id'])} — {r['time']} — {r.get('name','')} ({r.get('guests_range', r['guests'])}) — {r['status']}" for _, r in today_df.sort_values("time").iterrows()]
     await message.answer("\n".join(lines))

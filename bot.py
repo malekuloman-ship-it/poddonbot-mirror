@@ -19,6 +19,15 @@ from dotenv import load_dotenv
 from PIL import Image, ImageOps
 from hashlib import md5
 
+# -------------------- PATHS (нужны раньше для логов) --------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_BOOKINGS    = os.path.join(BASE_DIR, "bookings.csv")
+MENU_IMAGES_DIR  = os.path.join(BASE_DIR, "menu_images")  # подпапки big / small
+TMP_MENU_DIR     = os.path.join(BASE_DIR, "tmp_menu_cache")
+QUIZ_USERS_CSV   = os.path.join(BASE_DIR, "quiz_users.csv")
+COUPONS_GEN_CSV  = os.path.join(BASE_DIR, "coupons_generated.csv")
+os.makedirs(TMP_MENU_DIR, exist_ok=True)
+
 # -------------------- ENV & LOGGING --------------------
 load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
@@ -28,9 +37,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
-from logging.handlers import RotatingFileHandler
 
-# файл-лог (10 MB * 5 ротаций)
+from logging.handlers import RotatingFileHandler
 file_handler = RotatingFileHandler(
     filename=os.path.join(BASE_DIR, "bot.log"),
     maxBytes=10_000_000,
@@ -58,23 +66,8 @@ def verify_env():
         raise RuntimeError(f"В .env отсутствует(ют): {', '.join(missing)}")
 verify_env()
 
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
-# -------------------- PATHS --------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_BOOKINGS    = os.path.join(BASE_DIR, "bookings.csv")
-MENU_IMAGES_DIR  = os.path.join(BASE_DIR, "menu_images")  # подпапки big / small
-TMP_MENU_DIR     = os.path.join(BASE_DIR, "tmp_menu_cache")
-QUIZ_USERS_CSV   = os.path.join(BASE_DIR, "quiz_users.csv")
-COUPONS_GEN_CSV  = os.path.join(BASE_DIR, "coupons_generated.csv")
-os.makedirs(TMP_MENU_DIR, exist_ok=True)
-
-MENU_BRANCHES = [
-    {"name": "Большой ПОДДОН", "slug": "big"},
-    {"name": "Малый ПОДДОН",   "slug": "small"},
-]
 
 # -------------------- DATA LOADING --------------------
 def load_copy() -> dict:
@@ -292,17 +285,17 @@ async def start_quiz_for_user(message: Message):
     uid = message.from_user.id
     st = get_user_quiz_state(uid)
 
-    # полный запрет для победителей
+    # Полный запрет для победителей
     if int(st.get("awarded", 0)) == 1:
         await message.answer("Вы уже выиграли приз 🎉 Повторная игра недоступна.")
         return
 
-    # проверка блокировки
+    # Проверка блокировки
     if st.get("locked_until_iso"):
         try:
             until = datetime.fromisoformat(st["locked_until_iso"])
             if datetime.now() < until:
-                await message.answer(f"Сегодня без игры 😔 Попробуйте снова **после {format_time_hhmm(until)}**.")
+                await message.answer(f"Сегодня без игры 😔 Попробуйте снова после {format_time_hhmm(until)}.")
                 return
             else:
                 st["locked_until_iso"] = ""
@@ -365,7 +358,7 @@ async def cb_quiz_answer(call: CallbackQuery):
 
         st = get_user_quiz_state(uid)
 
-        # полный запрет для победителей (на случай клика по старым кнопкам)
+        # Полный запрет для победителей (клик по старым кнопкам)
         if int(st.get("awarded", 0)) == 1:
             await call.message.answer("Вы уже выиграли приз 🎉 Повторная игра недоступна.")
             await call.answer()
@@ -392,8 +385,8 @@ async def cb_quiz_answer(call: CallbackQuery):
 
                 if code:
                     await call.message.answer(
-                        f"🔥 Три подряд! Ваш приз — **бесплатная настойка**.\n"
-                        f"Код купона: **{code}**\n"
+                        f"🔥 Три подряд! Ваш приз — бесплатная настойка.\n"
+                        f"Код купона: {code}\n"
                         f"Покажите его бармену при заказе."
                     )
                     await notify_admin_coupon(code, call.from_user)
@@ -403,11 +396,14 @@ async def cb_quiz_answer(call: CallbackQuery):
                         "Купон уже получали ранее — повторно не выдаётся."
                     )
 
-                # сбрасываем стрик после победы
+                # Сбрасываем стрик и закрываем вопрос без выдачи нового
                 st["streak"] = 0
                 set_user_quiz_state(st)
+                QUIZ_STATE.pop(qid, None)
+                await call.answer()
+                return
             else:
-                await call.message.answer(f"Верно! 👏 Осталось правильных подряд: **{3 - st['streak']}**")
+                await call.message.answer(f"Верно! 👏 Осталось правильных подряд: {3 - st['streak']}")
                 await start_quiz_for_user(call.message)
 
         else:
@@ -417,18 +413,18 @@ async def cb_quiz_answer(call: CallbackQuery):
             st["locked_until_iso"] = lock_until.isoformat(timespec="seconds")
             set_user_quiz_state(st)
             await call.message.answer(
-                f"Чуть‑чуть мимо 😬 Попробуйте снова **после {format_time_hhmm(lock_until)}**."
+                f"Чуть-чуть мимо 😬 Попробуйте снова после {format_time_hhmm(lock_until)}."
             )
 
         QUIZ_STATE.pop(qid, None)
 
     except Exception as e:
         logging.exception("Ошибка обработки ответа викторины: %s", e)
-        await call.message.answer("Что‑то пошло не так. Попробуем ещё раз.")
+        await call.message.answer("Что-то пошло не так. Попробуем ещё раз.")
 
     await call.answer()
 
-# -------------------- NLU / PARСING (бронь) --------------------
+# -------------------- NLU / PARSING (бронь) --------------------
 PHONE_RE = re.compile(r"(\+?\d[\d\s\-\(\)]{6,}\d)")
 
 WORDS_TO_NUM = {
@@ -702,7 +698,7 @@ async def cmd_start(message: Message):
     ])
     await message.answer(COPY.get("greeting", "Привет!"), reply_markup=kb)
 
-    @dp.message(Command("health"))
+@dp.message(Command("health")))
 async def cmd_health(message: Message):
     import sys
     import aiogram, pandas, PIL
@@ -715,19 +711,23 @@ async def cmd_health(message: Message):
     )
     await message.answer(info)
 
-@dp.message(Command("whoami"))
+@dp.message(Command("whoami")))
 async def cmd_whoami(message: Message):
     await message.answer(f"Твой user_id: {message.from_user.id}\nЧат id: {message.chat.id}")
 
-@dp.message(Command("bookings_today"))
+@dp.message(Command("bookings_today")))
 async def cmd_bookings_today(message: Message):
     if not ADMIN_CHAT_ID or str(message.chat.id) != str(ADMIN_CHAT_ID):
-        await message.answer("Команда доступна только в админ‑чате."); return
+        await message.answer("Команда доступна только в админ-чате."); return
     df = load_bookings()
-    if df.empty: await message.answer("Сегодня броней нет."); return
+    if df.empty: 
+        await message.answer("Сегодня броней нет."); 
+        return
     today = datetime.now().date().isoformat(); df["date"] = df["date"].astype(str)
     today_df = df[df["date"] == today]
-    if today_df.empty: await message.answer("Сегодня броней нет."); return
+    if today_df.empty: 
+        await message.answer("Сегодня броней нет."); 
+        return
     lines = [f"#{int(r['id'])} — {r['time']} — {r.get('name','')} ({r.get('guests_range', r['guests'])}) — {r['status']}" for _, r in today_df.sort_values("time").iterrows()]
     await message.answer("\n".join(lines))
 
@@ -792,7 +792,7 @@ async def universal_router(message: Message):
         if "date" not in st:   missing.append("дату")
         if "time" not in st:   missing.append("время")
         if "guests_max" not in st and "guests_min" not in st:
-            missing.append("кол‑во гостей (можно диапазон)")
+            missing.append("кол-во гостей (можно диапазон)")
         if "phone" not in st:  missing.append("телефон (и имя)")
 
         if missing:
@@ -880,6 +880,7 @@ async def finalize_booking(message: Message, st: dict):
 
     BOOK_STATE.pop(uid, None)
 
+# -------- Middleware: ловим необработанные исключения и не падаем -----
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.types import Update
 
@@ -889,9 +890,7 @@ class AdminErrorMiddleware(BaseMiddleware):
             return await handler(event, data)
         except Exception as e:
             logging.exception("Необработанное исключение: %s", e)
-            # необязательная алерта администратору
             await report_error_to_admin(repr(e))
-            # не валим диспетчер
             return
 
 dp.message.middleware(AdminErrorMiddleware())
@@ -910,4 +909,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

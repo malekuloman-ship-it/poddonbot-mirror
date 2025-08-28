@@ -28,9 +28,36 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
+from logging.handlers import RotatingFileHandler
+
+# файл-лог (10 MB * 5 ротаций)
+file_handler = RotatingFileHandler(
+    filename=os.path.join(BASE_DIR, "bot.log"),
+    maxBytes=10_000_000,
+    backupCount=5,
+    encoding="utf-8",
+)
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+logging.getLogger().addHandler(file_handler)
+
+async def report_error_to_admin(text: str):
+    try:
+        if ADMIN_CHAT_ID and str(ADMIN_CHAT_ID).strip():
+            await bot.send_message(int(ADMIN_CHAT_ID), f"⚠️ Ошибка: {text[:3800]}")
+    except Exception:
+        pass
 
 if not BOT_TOKEN:
     raise RuntimeError("В .env не найден TELEGRAM_BOT_TOKEN / BOT_TOKEN")
+
+REQUIRED_ENV = ["TELEGRAM_BOT_TOKEN", "ADMIN_CHAT_ID"]
+def verify_env():
+    missing = [k for k in REQUIRED_ENV if not os.getenv(k)]
+    if missing:
+        raise RuntimeError(f"В .env отсутствует(ют): {', '.join(missing)}")
+verify_env()
+
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -52,14 +79,23 @@ MENU_BRANCHES = [
 # -------------------- DATA LOADING --------------------
 def load_copy() -> dict:
     path = os.path.join(BASE_DIR, "bot_copy.json")
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    return {
-        "greeting": "Привет! Помогу с бронью, меню, адресом и мини‑викториной. С чего начнём?",
+    default = {
+        "greeting": "Привет! Помогу с бронью, меню, адресом и мини-викториной. С чего начнём?",
         "unknown": "Я на связи. Могу помочь с бронью, меню, адресом и викториной. Что интересно?",
         "quiz_intro": "Молниеносная викторина. Готов?",
     }
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+            if not isinstance(data, dict):
+                logging.warning("bot_copy.json не dict — откатываюсь к дефолту")
+                return default
+            return {**default, **data}
+    except Exception as e:
+        logging.exception("Не смог прочитать bot_copy.json — беру дефолт: %s", e)
+        return default
 
 def read_csv_safe(path: str) -> pd.DataFrame:
     if not os.path.exists(path):
@@ -666,6 +702,19 @@ async def cmd_start(message: Message):
     ])
     await message.answer(COPY.get("greeting", "Привет!"), reply_markup=kb)
 
+    @dp.message(Command("health"))
+async def cmd_health(message: Message):
+    import sys
+    import aiogram, pandas, PIL
+    info = (
+        "OK\n"
+        f"python: {sys.version.split()[0]}\n"
+        f"aiogram: {aiogram.__version__}\n"
+        f"pandas: {pandas.__version__}\n"
+        f"Pillow: {PIL.__version__}"
+    )
+    await message.answer(info)
+
 @dp.message(Command("whoami"))
 async def cmd_whoami(message: Message):
     await message.answer(f"Твой user_id: {message.from_user.id}\nЧат id: {message.chat.id}")
@@ -830,6 +879,23 @@ async def finalize_booking(message: Message, st: dict):
             logging.exception("Не удалось отправить сообщение админу: %s", e)
 
     BOOK_STATE.pop(uid, None)
+
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
+from aiogram.types import Update
+
+class AdminErrorMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event: Update, data):
+        try:
+            return await handler(event, data)
+        except Exception as e:
+            logging.exception("Необработанное исключение: %s", e)
+            # необязательная алерта администратору
+            await report_error_to_admin(repr(e))
+            # не валим диспетчер
+            return
+
+dp.message.middleware(AdminErrorMiddleware())
+dp.callback_query.middleware(AdminErrorMiddleware())
 
 # -------------------- MAIN --------------------
 async def main():

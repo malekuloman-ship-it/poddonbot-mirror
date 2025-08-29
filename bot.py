@@ -28,7 +28,7 @@ QUIZ_USERS_CSV   = os.path.join(BASE_DIR, "quiz_users.csv")
 COUPONS_GEN_CSV  = os.path.join(BASE_DIR, "coupons_generated.csv")
 os.makedirs(TMP_MENU_DIR, exist_ok=True)
 
-# Филиалы меню (используется в кнопках выбора)
+# Филиалы (единый список с slug'ами)
 MENU_BRANCHES = [
     {"name": "Большой ПОДДОН", "slug": "big"},
     {"name": "Малый ПОДДОН",   "slug": "small"},
@@ -498,11 +498,11 @@ def extract_date(text: str):
         except ValueError: pass
     if "сегодня" in t: return datetime.now().date()
     if "завтра" in t:  return (datetime.now() + timedelta(days=1)).date()
-    if "послезавтра" in t or "после завтра" in t: return (datetime.now() + timedelta(days=2)).date()
+    if "послезавтра" in t или "после завтра" in t: return (datetime.now() + timedelta(days=2)).date()
     for w, idx in WEEKDAY_FULL.items():
         if re.search(rf"\b{re.escape(w[:-1])}\w*\b", t):
             today = datetime.now()
-            shift = (idx - today.weekday()) % 7 or 7
+            shift = (idx - today.weekday()) % 7 или 7
             return (today + timedelta(days=shift)).date()
     m = re.search(r"\b(\d{1,2})(?:\s*|-)?(?:го|ого)\b", t) or re.search(r"\b(\d{1,2})\s*числа\b", t)
     if m:
@@ -553,7 +553,7 @@ def parse_booking_phrase(text: str):
 # -------------------- INTENTS --------------------
 INTENT_KEYWORDS = {
     "menu": ["меню","посмотреть меню","карта","барная карта","лист"],
-    "venue": ["адрес","где вы","как добраться","работаете","часы","до скольки","во сколько"],
+    "venue": ["адрес","где вы","как добраться","работаете","часы","до скольки","во сколько","контакты","телефон"],
     "quiz": ["викторина","квиз","приз","розыгрыш"],
     "book": ["бронь","заброни","резерв","столик","стол","посадка"],
 }
@@ -568,7 +568,7 @@ def detect_intent(text: str, in_booking_flow: bool) -> Optional[str]:
         if any(k in t for k in keys): return intent
     return None
 
-# -------------------- MENU --------------------
+# -------------------- MENU IMAGES --------------------
 def list_menu_images_for_slug(slug: str) -> List[str]:
     folder = os.path.join(MENU_IMAGES_DIR, slug)
     if not os.path.isdir(folder): return []
@@ -656,20 +656,50 @@ def branch_name_by_slug(slug: str) -> str:
             return b["name"]
     return slug
 
-# -------------------- VENUE --------------------
+# -------------------- VENUE (контакты) --------------------
 def venue_today_hours(venue_row: pd.Series):
     if venue_row is None or venue_row.empty: return None
     weekday = datetime.now().weekday()
     hours_col = "hours_weekday" if weekday < 5 else "hours_weekend"
     return venue_row.get(hours_col)
 
-async def send_venue(message: Message):
+def find_venue_row(slug: str) -> Optional[pd.Series]:
     if VENUES.empty:
-        await message.answer("Адрес и часы не заданы. Заполни venues_template.csv."); return
-    row = VENUES.iloc[0]
-    name = row.get("name", "Наш бар"); address = row.get("address", "—"); phone = row.get("phone", "—"); maps = row.get("maps_url", "")
+        return None
+    # 1) Явный столбец slug
+    if "slug" in VENUES.columns:
+        rows = VENUES[VENUES["slug"].astype(str).str.lower() == slug.lower()]
+        if not rows.empty:
+            return rows.iloc[0]
+    # 2) По имени из MENU_BRANCHES
+    name_hint = branch_name_by_slug(slug)
+    if "name" in VENUES.columns:
+        mask = VENUES["name"].astype(str).str.lower().str.contains(name_hint.lower().replace("поддон", "").strip())
+        rows = VENUES[mask]
+        if not rows.empty:
+            return rows.iloc[0]
+    # 3) Фоллбек — первая строка
+    return VENUES.iloc[0]
+
+async def show_venue_branch_picker(message: Message):
+    buttons = [[InlineKeyboardButton(text=b["name"], callback_data=f"venue_branch:{b['slug']}")] for b in MENU_BRANCHES]
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("Выбери филиал для контактов:", reply_markup=kb)
+
+async def send_venue_for_branch(message: Message, slug: str):
+    if VENUES.empty:
+        await message.answer("Адреса и часы не заданы. Заполни venues_template.csv.")
+        return
+    row = find_venue_row(slug)
+    name = row.get("name", branch_name_by_slug(slug))
+    address = row.get("address", "—")
+    phone = row.get("phone", "—")
+    maps = row.get("maps_url", "")
     hours_val = venue_today_hours(row) or "часы не заданы"
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Построить маршрут", url=maps)]]) if isinstance(maps, str) and maps.strip() else None
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Построить маршрут", url=maps)]]) \
+        if isinstance(maps, str) and maps.strip() else None
+
     await message.answer(f"{name}\nАдрес: {address}\nТелефон: {phone}\nСегодня работаем: {hours_val}", reply_markup=kb)
 
 # -------------------- ADMIN: смена статуса брони --------------------
@@ -751,7 +781,15 @@ async def cb_menu_branch(call: CallbackQuery):
 
 @dp.callback_query(F.data == "action:venue")
 async def cb_venue(call: CallbackQuery):
-    await send_venue(call.message); await call.answer()
+    # Раньше показывали контакты сразу; теперь — выбор филиала
+    await show_venue_branch_picker(call.message)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("venue_branch:"))
+async def cb_venue_branch(call: CallbackQuery):
+    slug = call.data.split(":", 1)[1]
+    await send_venue_for_branch(call.message, slug)
+    await call.answer()
 
 @dp.callback_query(F.data == "action:book")
 async def cb_book(call: CallbackQuery):
@@ -772,13 +810,13 @@ async def universal_router(message: Message):
 
     intent = detect_intent(text, in_booking_flow=bool(st))
     if intent == "menu":  await show_menu_branch_picker(message)
-    if intent == "venue": await send_venue(message)
+    if intent == "venue": await show_venue_branch_picker(message)  # изменено: сначала выбор филиала
     if intent == "quiz":  await start_quiz_for_user(message)
 
     d, t, gmin, gmax = parse_booking_phrase(text)
     has_clues = any([d, t, gmin, gmax])
 
-    if intent == "book" or st or has_clues:
+    if intent == "book" или st или has_clues:
         st = st or {}
         if d: st["date"] = d
         if t: st["time"] = t
@@ -791,7 +829,7 @@ async def universal_router(message: Message):
             name = extract_name_from_contact_text(text, phone)
             if name: st["name"] = name
 
-        st.setdefault("name", (message.from_user.full_name or "Гость"))
+        st.setdefault("name", (message.from_user.full_name или "Гость"))
         BOOK_STATE[uid] = st
 
         missing = []
@@ -805,7 +843,7 @@ async def universal_router(message: Message):
             parts = []
             if st.get("date"):   parts.append(st["date"].strftime("%d.%m.%Y"))
             if st.get("time"):   parts.append(st["time"])
-            if st.get("guests_min") or st.get("guests_max"):
+            if st.get("guests_min") или st.get("guests_max"):
                 g1 = st.get("guests_min"); g2 = st.get("guests_max", g1)
                 parts.append(f"{g1}–{g2} чел." if (g1 and g2 and g1 != g2) else f"{g2 or g1} чел.")
             if st.get("phone"):  parts.append(f"тел. {st['phone']}")

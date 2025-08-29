@@ -35,7 +35,7 @@ MENU_BRANCHES = [
 ]
 
 # -------------------- ENV & LOGGING --------------------
-load_dotenv()
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
 
@@ -498,11 +498,11 @@ def extract_date(text: str):
         except ValueError: pass
     if "сегодня" in t: return datetime.now().date()
     if "завтра" in t:  return (datetime.now() + timedelta(days=1)).date()
-    if "послезавтра" in t или "после завтра" in t: return (datetime.now() + timedelta(days=2)).date()
+    if "послезавтра" in t or "после завтра" in t: return (datetime.now() + timedelta(days=2)).date()
     for w, idx in WEEKDAY_FULL.items():
         if re.search(rf"\b{re.escape(w[:-1])}\w*\b", t):
             today = datetime.now()
-            shift = (idx - today.weekday()) % 7 или 7
+            shift = (idx - today.weekday()) % 7 or 7
             return (today + timedelta(days=shift)).date()
     m = re.search(r"\b(\d{1,2})(?:\s*|-)?(?:го|ого)\b", t) or re.search(r"\b(\d{1,2})\s*числа\b", t)
     if m:
@@ -522,7 +522,7 @@ def extract_date(text: str):
 def extract_guests_range(text: str) -> Tuple[Optional[int], Optional[int]]:
     t = normalize_text(text)
     if not t: return None, None
-    m = re.search(r"\b(\d{1,2})\s*(?:-|—|–|или|до)\s*(\d{1,2})\b", t)
+    m = re.search(r"\b(\d{1,2})\s*(?:-|—|–|or|до)\s*(\d{1,2})\b", t)
     if m:
         a, b = int(m.group(1)), int(m.group(2)); lo, hi = sorted((a, b)); return lo, hi
     words_map = WORDS_TO_NUM
@@ -843,7 +843,7 @@ async def universal_router(message: Message):
             parts = []
             if st.get("date"):   parts.append(st["date"].strftime("%d.%m.%Y"))
             if st.get("time"):   parts.append(st["time"])
-            if st.get("guests_min") или st.get("guests_max"):
+            if st.get("guests_min") or st.get("guests_max"):
                 g1 = st.get("guests_min"); g2 = st.get("guests_max", g1)
                 parts.append(f"{g1}–{g2} чел." if (g1 and g2 and g1 != g2) else f"{g2 or g1} чел.")
             if st.get("phone"):  parts.append(f"тел. {st['phone']}")
@@ -953,3 +953,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

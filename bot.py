@@ -816,7 +816,7 @@ async def universal_router(message: Message):
     d, t, gmin, gmax = parse_booking_phrase(text)
     has_clues = any([d, t, gmin, gmax])
 
-    if intent == "book" или st или has_clues:
+    if intent == "book" or st or has_clues:
         st = st or {}
         if d: st["date"] = d
         if t: st["time"] = t
@@ -829,7 +829,7 @@ async def universal_router(message: Message):
             name = extract_name_from_contact_text(text, phone)
             if name: st["name"] = name
 
-        st.setdefault("name", (message.from_user.full_name или "Гость"))
+        st.setdefault("name", (message.from_user.full_name or "Гость"))
         BOOK_STATE[uid] = st
 
         missing = []
@@ -953,4 +953,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

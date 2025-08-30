@@ -18,7 +18,6 @@ from aiogram.filters import Command
 from dotenv import load_dotenv
 from PIL import Image, ImageOps
 from hashlib import md5
-import csv
 
 # -------------------- PATHS (нужны раньше для логов) --------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -98,61 +97,13 @@ def load_copy() -> dict:
         return default
 
 def read_csv_safe(path: str) -> pd.DataFrame:
-    """
-    Устойчивое чтение CSV:
-    - пробуем обычный парсинг
-    - если падает из-за количества столбцов/знаков препинания —
-      пробуем python-движок + автоопределение разделителя
-    - в крайнем случае пропускаем битые строки (on_bad_lines='skip'),
-      чтобы бот не падал на старте.
-    """
     if not os.path.exists(path):
         logging.warning("Файл не найден: %s", path)
         return pd.DataFrame()
-
-    # 1) стандартный быстрый парсер
     try:
-        return pd.read_csv(path, encoding="utf-8-sig", dtype=str)
-    except pd.errors.ParserError as e1:
-        logging.warning("ParserError на %s: %s — пробую python-engine с авторазделителем", path, e1)
-
-    # 2) python engine + автоопределение разделителя
-    try:
-        with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
-            sample = f.read(4096)
-        try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=[",",";","|","\t"])
-            sep = dialect.delimiter
-            quotechar = dialect.quotechar or '"'
-        except Exception:
-            sep = None  # пусть pandas сам попробует
-            quotechar = '"'
-        return pd.read_csv(
-            path,
-            encoding="utf-8-sig",
-            engine="python",
-            sep=sep,              # None -> автоопределение
-            quotechar=quotechar,
-            dtype=str
-        )
-    except pd.errors.ParserError as e2:
-        logging.warning("ParserError (python-engine) на %s: %s — пропущу битые строки", path, e2)
-    except Exception as e2a:
-        logging.warning("Не удалось распарсить %s python-движком: %s — попробую пропустить битые строки", path, e2a)
-
-    # 3) как крайний случай — пропускаем битые строки, чтобы бот не падал
-    try:
-        return pd.read_csv(
-            path,
-            encoding="utf-8-sig",
-            engine="python",
-            sep=None,            # автоопределение
-            on_bad_lines="skip",
-            dtype=str
-        )
-    except Exception as e3:
-        logging.error("Полностью не удалось распарсить %s: %s — верну пустой DataFrame", path, e3)
-        return pd.DataFrame()
+        return pd.read_csv(path, encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return pd.read_csv(path, encoding="utf-8")
 
 COPY    = load_copy()
 MENU    = read_csv_safe(os.path.join(BASE_DIR, "menu_template.csv"))
@@ -189,21 +140,7 @@ def ensure_quiz_files():
         cols = ["code","user_id","username","full_name","issued_at"]
         pd.DataFrame(columns=cols).to_csv(COUPONS_GEN_CSV, index=False, encoding="utf-8-sig")
 
-def _coerce_awarded_value(x) -> int:
-    """Старая база могла хранить True/yes/да/ok/won и т.п.
-    Приводим всё это к 1/0."""
-    if isinstance(x, (int, float)) and not pd.isna(x):
-        try:
-            return 1 if int(x) != 0 else 0
-        except Exception:
-            pass
-    s = str(x).strip().lower()
-    if s in {"1", "true", "t", "yes", "y", "да", "ok", "win", "won", "received", "got", "получил", "есть"}:
-        return 1
-    return 0
-
 def fix_quiz_users_dtypes(df: pd.DataFrame) -> pd.DataFrame:
-    # ensure columns exist
     for col in ["locked_until_iso", "last_played_at"]:
         if col not in df.columns:
             df[col] = ""
@@ -211,34 +148,15 @@ def fix_quiz_users_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["user_id", "streak", "awarded", "current_qid"]:
         if col not in df.columns:
             df[col] = 0
-
-    # coerce numerics safely
-    for col in ["user_id", "streak", "current_qid"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
-
-    # awarded: robust legacy support
-    df["awarded"] = df["awarded"].apply(_coerce_awarded_value).astype(int)
     return df
 
 def load_quiz_users() -> pd.DataFrame:
     ensure_quiz_files()
     df = pd.read_csv(QUIZ_USERS_CSV, encoding="utf-8-sig")
-    df = fix_quiz_users_dtypes(df)
-
-    # Доп. совместимость: если в coupons_generated уже есть записи для user_id — считаем awarded=1.
-    try:
-        cg = read_csv_safe(COUPONS_GEN_CSV)
-        if not cg.empty and "user_id" in cg.columns:
-            winners = set(pd.to_numeric(cg["user_id"], errors="coerce").fillna(0).astype(int))
-            if winners:
-                df.loc[df["user_id"].isin(winners), "awarded"] = 1
-    except Exception as e:
-        logging.warning("Не удалось сверить coupons_generated: %s", e)
-
-    return df
+    return fix_quiz_users_dtypes(df)
 
 def save_quiz_users(df: pd.DataFrame):
-    df = fix_quiz_users_dtypes(df)
     df.to_csv(QUIZ_USERS_CSV, index=False, encoding="utf-8-sig")
 
 def load_coupons_gen() -> pd.DataFrame:
@@ -253,7 +171,7 @@ def pick_quiz_question():
     if QUIZ.empty: return None
     df = QUIZ
     if "active" in df.columns:
-        active = df[df["active"].astype(str).str.strip().isin(["1","true","True"])]
+        active = df[df["active"] == 1]
         if not active.empty:
             df = active
     return df.sample(1).iloc[0]
@@ -295,7 +213,7 @@ def get_user_quiz_state(user_id: int) -> dict:
         return {"user_id": user_id, "streak": 0, "locked_until_iso": "", "awarded": 0, "last_played_at": "", "current_qid": 0}
     r = row.iloc[0].to_dict()
     r["streak"] = int(r.get("streak", 0) or 0)
-    r["awarded"] = _coerce_awarded_value(r.get("awarded", 0))
+    r["awarded"] = int(r.get("awarded", 0) or 0)
     r["current_qid"] = int(r.get("current_qid", 0) or 0)
     r["locked_until_iso"] = str(r.get("locked_until_iso", "") or "")
     r["last_played_at"]   = str(r.get("last_played_at", "") or "")
@@ -307,7 +225,7 @@ def set_user_quiz_state(state: dict):
 
     user_id = int(state["user_id"])
     streak = int(state.get("streak", 0) or 0)
-    awarded = _coerce_awarded_value(state.get("awarded", 0))
+    awarded = int(state.get("awarded", 0) or 0)
     current_qid = int(state.get("current_qid", 0) or 0)
     locked_until_iso = str(state.get("locked_until_iso", "") or "")
     last_played_at = str(state.get("last_played_at", "") or "")
@@ -898,7 +816,7 @@ async def universal_router(message: Message):
     d, t, gmin, gmax = parse_booking_phrase(text)
     has_clues = any([d, t, gmin, gmax])
 
-    if intent == "book" or st or has_clues:
+    if intent == "book" или st или has_clues:
         st = st or {}
         if d: st["date"] = d
         if t: st["time"] = t
@@ -911,7 +829,7 @@ async def universal_router(message: Message):
             name = extract_name_from_contact_text(text, phone)
             if name: st["name"] = name
 
-        st.setdefault("name", (message.from_user.full_name or "Гость"))
+        st.setdefault("name", (message.from_user.full_name или "Гость"))
         BOOK_STATE[uid] = st
 
         missing = []
@@ -1035,3 +953,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+

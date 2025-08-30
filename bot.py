@@ -1,5 +1,6 @@
 import asyncio
 import os
+import csv
 import json
 import random
 import logging
@@ -96,14 +97,47 @@ def load_copy() -> dict:
         logging.exception("Не смог прочитать bot_copy.json — беру дефолт: %s", e)
         return default
 
+
 def read_csv_safe(path: str) -> pd.DataFrame:
+    """
+    Надёжное чтение CSV:
+      - автоопределение разделителя (',', ';', '\t', '|');
+      - engine='python' + on_bad_lines='skip' чтобы не падать на «кривых» строках;
+      - возврат пустого DataFrame при любой ошибке.
+    """
+    import pandas as _pd, csv as _csv
     if not os.path.exists(path):
         logging.warning("Файл не найден: %s", path)
-        return pd.DataFrame()
+        return _pd.DataFrame()
     try:
-        return pd.read_csv(path, encoding="utf-8-sig")
-    except UnicodeDecodeError:
-        return pd.read_csv(path, encoding="utf-8")
+        try:
+            with open(path, "r", encoding="utf-8-sig") as f:
+                sample = f.read(4096)
+        except UnicodeDecodeError:
+            with open(path, "r", encoding="utf-8") as f:
+                sample = f.read(4096)
+
+        delim = ","
+        try:
+            dialect = _csv.Sniffer().sniff(sample, delimiters=[",",";","\t","|"])
+            delim = dialect.delimiter
+        except Exception:
+            counts = {d: sample.count(d) for d in [",",";","\t","|"]}
+            delim = max(counts, key=counts.get)
+
+        return _pd.read_csv(
+            path,
+            encoding="utf-8-sig",
+            sep=delim,
+            engine="python",
+            on_bad_lines="skip"
+        )
+    except Exception as e:
+        logging.error("read_csv_safe: %s -> %s", path, e)
+        try:
+            return _pd.read_csv(path, encoding="utf-8-sig", engine="python", on_bad_lines="skip")
+        except Exception:
+            return _pd.DataFrame()
 
 COPY    = load_copy()
 MENU    = read_csv_safe(os.path.join(BASE_DIR, "menu_template.csv"))

@@ -18,6 +18,7 @@ from aiogram.filters import Command
 from dotenv import load_dotenv
 from PIL import Image, ImageOps
 from hashlib import md5
+import csv
 
 # -------------------- PATHS (нужны раньше для логов) --------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -97,13 +98,61 @@ def load_copy() -> dict:
         return default
 
 def read_csv_safe(path: str) -> pd.DataFrame:
+    """
+    Устойчивое чтение CSV:
+    - пробуем обычный парсинг
+    - если падает из-за количества столбцов/знаков препинания —
+      пробуем python-движок + автоопределение разделителя
+    - в крайнем случае пропускаем битые строки (on_bad_lines='skip'),
+      чтобы бот не падал на старте.
+    """
     if not os.path.exists(path):
         logging.warning("Файл не найден: %s", path)
         return pd.DataFrame()
+
+    # 1) стандартный быстрый парсер
     try:
-        return pd.read_csv(path, encoding="utf-8-sig")
-    except UnicodeDecodeError:
-        return pd.read_csv(path, encoding="utf-8")
+        return pd.read_csv(path, encoding="utf-8-sig", dtype=str)
+    except pd.errors.ParserError as e1:
+        logging.warning("ParserError на %s: %s — пробую python-engine с авторазделителем", path, e1)
+
+    # 2) python engine + автоопределение разделителя
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
+            sample = f.read(4096)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=[",",";","|","\t"])
+            sep = dialect.delimiter
+            quotechar = dialect.quotechar or '"'
+        except Exception:
+            sep = None  # пусть pandas сам попробует
+            quotechar = '"'
+        return pd.read_csv(
+            path,
+            encoding="utf-8-sig",
+            engine="python",
+            sep=sep,              # None -> автоопределение
+            quotechar=quotechar,
+            dtype=str
+        )
+    except pd.errors.ParserError as e2:
+        logging.warning("ParserError (python-engine) на %s: %s — пропущу битые строки", path, e2)
+    except Exception as e2a:
+        logging.warning("Не удалось распарсить %s python-движком: %s — попробую пропустить битые строки", path, e2a)
+
+    # 3) как крайний случай — пропускаем битые строки, чтобы бот не падал
+    try:
+        return pd.read_csv(
+            path,
+            encoding="utf-8-sig",
+            engine="python",
+            sep=None,            # автоопределение
+            on_bad_lines="skip",
+            dtype=str
+        )
+    except Exception as e3:
+        logging.error("Полностью не удалось распарсить %s: %s — верну пустой DataFrame", path, e3)
+        return pd.DataFrame()
 
 COPY    = load_copy()
 MENU    = read_csv_safe(os.path.join(BASE_DIR, "menu_template.csv"))
@@ -204,7 +253,7 @@ def pick_quiz_question():
     if QUIZ.empty: return None
     df = QUIZ
     if "active" in df.columns:
-        active = df[df["active"] == 1]
+        active = df[df["active"].astype(str).str.strip().isin(["1","true","True"])]
         if not active.empty:
             df = active
     return df.sample(1).iloc[0]

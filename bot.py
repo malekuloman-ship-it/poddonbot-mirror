@@ -1,6 +1,5 @@
 import asyncio
 import os
-import csv
 import json
 import random
 import logging
@@ -97,47 +96,20 @@ def load_copy() -> dict:
         logging.exception("Не смог прочитать bot_copy.json — беру дефолт: %s", e)
         return default
 
-
 def read_csv_safe(path: str) -> pd.DataFrame:
-    """
-    Надёжное чтение CSV:
-      - автоопределение разделителя (',', ';', '\t', '|');
-      - engine='python' + on_bad_lines='skip' чтобы не падать на «кривых» строках;
-      - возврат пустого DataFrame при любой ошибке.
-    """
-    import pandas as _pd, csv as _csv
     if not os.path.exists(path):
         logging.warning("Файл не найден: %s", path)
-        return _pd.DataFrame()
+        return pd.DataFrame()
     try:
-        try:
-            with open(path, "r", encoding="utf-8-sig") as f:
-                sample = f.read(4096)
-        except UnicodeDecodeError:
-            with open(path, "r", encoding="utf-8") as f:
-                sample = f.read(4096)
-
-        delim = ","
-        try:
-            dialect = _csv.Sniffer().sniff(sample, delimiters=[",",";","\t","|"])
-            delim = dialect.delimiter
-        except Exception:
-            counts = {d: sample.count(d) for d in [",",";","\t","|"]}
-            delim = max(counts, key=counts.get)
-
-        return _pd.read_csv(
-            path,
-            encoding="utf-8-sig",
-            sep=delim,
-            engine="python",
-            on_bad_lines="skip"
-        )
+        # Терпим к разному форматированию CSV (лишние запятые, кавычки и т.п.)
+        return pd.read_csv(path, encoding="utf-8-sig", engine="python", on_bad_lines="skip", keep_default_na=False)
+    except TypeError:  # старые pandas
+        return pd.read_csv(path, encoding="utf-8-sig", engine="python")
+    except UnicodeDecodeError:
+        return pd.read_csv(path, encoding="utf-8", engine="python", on_bad_lines="skip", keep_default_na=False)
     except Exception as e:
-        logging.error("read_csv_safe: %s -> %s", path, e)
-        try:
-            return _pd.read_csv(path, encoding="utf-8-sig", engine="python", on_bad_lines="skip")
-        except Exception:
-            return _pd.DataFrame()
+        logging.exception("Ошибка чтения CSV %s: %s", path, e)
+        return pd.DataFrame()
 
 COPY    = load_copy()
 MENU    = read_csv_safe(os.path.join(BASE_DIR, "menu_template.csv"))
@@ -239,21 +211,6 @@ def get_question_text(row) -> str:
 
 def format_time_hhmm(dt: datetime) -> str:
     return dt.strftime("%d.%m %H:%M")
-
-
-# --- Helper: check if a user already has any issued coupon (treat as already-winner) ---
-def user_has_coupon(user_id: int) -> bool:
-    try:
-        df = load_coupons_gen()
-        if df is None or df.empty:
-            return False
-        # Ensure numeric comparison
-        df = df.copy()
-        df["user_id"] = pd.to_numeric(df["user_id"], errors="coerce").fillna(0).astype(int)
-        return (df["user_id"] == int(user_id)).any()
-    except Exception as e:
-        logging.warning("Failed to inspect coupons_generated.csv: %s", e, exc_info=True)
-        return False
 
 def get_user_quiz_state(user_id: int) -> dict:
     df = load_quiz_users()
@@ -742,16 +699,19 @@ async def cb_admin_cancel(call: CallbackQuery):
         await call.answer("Недостаточно прав", show_alert=True); return
     await admin_update_status(int(call.data.split(":")[-1]), "canceled", call.message); await call.answer()
 
-# -------------------- COMMANDS --------------------
-@dp.message(Command("start"))
-async def cmd_start(message: Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+# Общая клавиатура главного меню (используется в нескольких местах)
+def main_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="МЕНЮ", callback_data="action:menu"),
          InlineKeyboardButton(text="КОНТАКТЫ", callback_data="action:venue")],
         [InlineKeyboardButton(text="ВИКТОРИНА", callback_data="action:quiz"),
          InlineKeyboardButton(text="БРОНЬ", callback_data="action:book")]
     ])
-    await message.answer(COPY.get("greeting", "Привет!"), reply_markup=kb)
+
+# -------------------- COMMANDS --------------------
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    await message.answer(COPY.get("greeting", "Привет!"), reply_markup=main_kb())
 
 @dp.message(Command("health"))
 async def cmd_health(message: Message):
@@ -809,11 +769,6 @@ async def cb_book(call: CallbackQuery):
 
 @dp.callback_query(F.data == "action:quiz")
 async def cb_quiz(call: CallbackQuery):
-    st = get_user_quiz_state(call.from_user.id)
-    if int(st.get("awarded",0)) == 1 or user_has_coupon(call.from_user.id):
-        await call.message.answer("Вы уже выиграли приз 🎉 Повторная игра недоступна.", reply_markup=main_kb())
-        await call.answer()
-        return
     await start_quiz_for_user(call.message)
     await call.answer()
 
@@ -827,12 +782,7 @@ async def universal_router(message: Message):
     intent = detect_intent(text, in_booking_flow=bool(st))
     if intent == "menu":  await show_menu_branch_picker(message)
     if intent == "venue": await send_venue(message)
-    if intent == "quiz":
-        stq = get_user_quiz_state(message.from_user.id)
-        if int(stq.get("awarded",0)) == 1 or user_has_coupon(message.from_user.id):
-            await message.answer("Вы уже выиграли приз 🎉 Повторная игра недоступна.", reply_markup=main_kb())
-        else:
-            await start_quiz_for_user(message)
+    if intent == "quiz":  await start_quiz_for_user(message)
 
     d, t, gmin, gmax = parse_booking_phrase(text)
     has_clues = any([d, t, gmin, gmax])

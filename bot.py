@@ -240,6 +240,21 @@ def get_question_text(row) -> str:
 def format_time_hhmm(dt: datetime) -> str:
     return dt.strftime("%d.%m %H:%M")
 
+
+# --- Helper: check if a user already has any issued coupon (treat as already-winner) ---
+def user_has_coupon(user_id: int) -> bool:
+    try:
+        df = load_coupons_gen()
+        if df is None or df.empty:
+            return False
+        # Ensure numeric comparison
+        df = df.copy()
+        df["user_id"] = pd.to_numeric(df["user_id"], errors="coerce").fillna(0).astype(int)
+        return (df["user_id"] == int(user_id)).any()
+    except Exception as e:
+        logging.warning("Failed to inspect coupons_generated.csv: %s", e, exc_info=True)
+        return False
+
 def get_user_quiz_state(user_id: int) -> dict:
     df = load_quiz_users()
     row = df[df["user_id"] == user_id]
@@ -794,6 +809,11 @@ async def cb_book(call: CallbackQuery):
 
 @dp.callback_query(F.data == "action:quiz")
 async def cb_quiz(call: CallbackQuery):
+    st = get_user_quiz_state(call.from_user.id)
+    if int(st.get("awarded",0)) == 1 or user_has_coupon(call.from_user.id):
+        await call.message.answer("Вы уже выиграли приз 🎉 Повторная игра недоступна.", reply_markup=main_kb())
+        await call.answer()
+        return
     await start_quiz_for_user(call.message)
     await call.answer()
 
@@ -807,7 +827,12 @@ async def universal_router(message: Message):
     intent = detect_intent(text, in_booking_flow=bool(st))
     if intent == "menu":  await show_menu_branch_picker(message)
     if intent == "venue": await send_venue(message)
-    if intent == "quiz":  await start_quiz_for_user(message)
+    if intent == "quiz":
+        stq = get_user_quiz_state(message.from_user.id)
+        if int(stq.get("awarded",0)) == 1 or user_has_coupon(message.from_user.id):
+            await message.answer("Вы уже выиграли приз 🎉 Повторная игра недоступна.", reply_markup=main_kb())
+        else:
+            await start_quiz_for_user(message)
 
     d, t, gmin, gmax = parse_booking_phrase(text)
     has_clues = any([d, t, gmin, gmax])
@@ -949,4 +974,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

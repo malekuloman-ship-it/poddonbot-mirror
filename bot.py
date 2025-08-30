@@ -140,7 +140,21 @@ def ensure_quiz_files():
         cols = ["code","user_id","username","full_name","issued_at"]
         pd.DataFrame(columns=cols).to_csv(COUPONS_GEN_CSV, index=False, encoding="utf-8-sig")
 
+def _coerce_awarded_value(x) -> int:
+    """Старая база могла хранить True/yes/да/ok/won и т.п.
+    Приводим всё это к 1/0."""
+    if isinstance(x, (int, float)) and not pd.isna(x):
+        try:
+            return 1 if int(x) != 0 else 0
+        except Exception:
+            pass
+    s = str(x).strip().lower()
+    if s in {"1", "true", "t", "yes", "y", "да", "ok", "win", "won", "received", "got", "получил", "есть"}:
+        return 1
+    return 0
+
 def fix_quiz_users_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    # ensure columns exist
     for col in ["locked_until_iso", "last_played_at"]:
         if col not in df.columns:
             df[col] = ""
@@ -148,15 +162,34 @@ def fix_quiz_users_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["user_id", "streak", "awarded", "current_qid"]:
         if col not in df.columns:
             df[col] = 0
+
+    # coerce numerics safely
+    for col in ["user_id", "streak", "current_qid"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    # awarded: robust legacy support
+    df["awarded"] = df["awarded"].apply(_coerce_awarded_value).astype(int)
     return df
 
 def load_quiz_users() -> pd.DataFrame:
     ensure_quiz_files()
     df = pd.read_csv(QUIZ_USERS_CSV, encoding="utf-8-sig")
-    return fix_quiz_users_dtypes(df)
+    df = fix_quiz_users_dtypes(df)
+
+    # Доп. совместимость: если в coupons_generated уже есть записи для user_id — считаем awarded=1.
+    try:
+        cg = read_csv_safe(COUPONS_GEN_CSV)
+        if not cg.empty and "user_id" in cg.columns:
+            winners = set(pd.to_numeric(cg["user_id"], errors="coerce").fillna(0).astype(int))
+            if winners:
+                df.loc[df["user_id"].isin(winners), "awarded"] = 1
+    except Exception as e:
+        logging.warning("Не удалось сверить coupons_generated: %s", e)
+
+    return df
 
 def save_quiz_users(df: pd.DataFrame):
+    df = fix_quiz_users_dtypes(df)
     df.to_csv(QUIZ_USERS_CSV, index=False, encoding="utf-8-sig")
 
 def load_coupons_gen() -> pd.DataFrame:
@@ -213,7 +246,7 @@ def get_user_quiz_state(user_id: int) -> dict:
         return {"user_id": user_id, "streak": 0, "locked_until_iso": "", "awarded": 0, "last_played_at": "", "current_qid": 0}
     r = row.iloc[0].to_dict()
     r["streak"] = int(r.get("streak", 0) or 0)
-    r["awarded"] = int(r.get("awarded", 0) or 0)
+    r["awarded"] = _coerce_awarded_value(r.get("awarded", 0))
     r["current_qid"] = int(r.get("current_qid", 0) or 0)
     r["locked_until_iso"] = str(r.get("locked_until_iso", "") or "")
     r["last_played_at"]   = str(r.get("last_played_at", "") or "")
@@ -225,7 +258,7 @@ def set_user_quiz_state(state: dict):
 
     user_id = int(state["user_id"])
     streak = int(state.get("streak", 0) or 0)
-    awarded = int(state.get("awarded", 0) or 0)
+    awarded = _coerce_awarded_value(state.get("awarded", 0))
     current_qid = int(state.get("current_qid", 0) or 0)
     locked_until_iso = str(state.get("locked_until_iso", "") or "")
     last_played_at = str(state.get("last_played_at", "") or "")
